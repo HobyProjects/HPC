@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
     }
 
     char out_name[1024];
-    snprintf(out_name, sizeof(out_name), "%s_results.txt", file_name ? file_name : "results");
+    snprintf(out_name, sizeof(out_name), "results.txt");
     FILE* out = fopen(out_name, "w");
     if (!out) {
         fprintf(stderr, "[ERROR]: Could not open output file '%s' for writing.\n", out_name);
