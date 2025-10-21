@@ -1,19 +1,3 @@
-// GaussianBlurEffect.cu
-// CUDA 12.2+ compatible separable Gaussian blur for RGBA8 PNGs using LodePNG (C++ wrapper)
-//
-// Build (example):
-//   nvcc -std=c++17 -O3 -use_fast_math -arch=sm_75 GaussianBlurEffect.cu lodepng.cpp -o gaussian_blur
-// Adjust -arch=sm_XX for your GPU (e.g., sm_86 for RTX 30xx, sm_89 for RTX 40xx).
-//
-// Usage:
-//   ./gaussian_blur input.png output.png  sigma [radius]
-// If radius is omitted, it is computed as ceil(3*sigma).
-//
-// Notes:
-// - This is a separable Gaussian: horizontal pass then vertical pass.
-// - Alpha is processed the same as RGB so premultiplied-alpha inputs blur correctly.
-// - The code intentionally prefers clarity over micro-optimizations.
-
 #include <cuda_runtime.h>
 #include <cstdint>
 #include <cstdlib>
@@ -22,9 +6,8 @@
 #include <vector>
 #include <cmath>
 
-#include "lodepng.h"  // C++ wrapper is enabled when compiled as C++ (see build cmd)
+#include "lodepng.h"
 
-/* ---------- CUDA error guard ---------- */
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
     cudaError_t _err = (call);                                               \
@@ -36,18 +19,13 @@
     }                                                                        \
   } while (0)
 
-/* ---------- Utilities ---------- */
 __device__ __forceinline__ int clampi(int v, int lo, int hi) {
   return v < lo ? lo : (v > hi ? hi : v);
 }
 
-/* ---------- Separable Gaussian: horizontal then vertical ---------- */
-
-// Horizontal pass: reads src, writes tmp (same pitch), applying 1D kernel along X.
-// Pixels are RGBA (uchar4). Kernel weights are in global memory (d_kernel) of length (2*radius+1).
 __global__ void gaussianHorizontal(const uchar4* __restrict__ src,
                                    uchar4* __restrict__ tmp,
-                                   int width, int height, int pitch,  // pitch in bytes
+                                   int width, int height, int pitch, 
                                    const float* __restrict__ d_kernel,
                                    int radius) {
   int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -78,7 +56,6 @@ __global__ void gaussianHorizontal(const uchar4* __restrict__ src,
   tmp[y * stride + x] = out;
 }
 
-// Vertical pass: reads tmp, writes dst, applying 1D kernel along Y.
 __global__ void gaussianVertical(const uchar4* __restrict__ tmp,
                                  uchar4* __restrict__ dst,
                                  int width, int height, int pitch,
@@ -92,7 +69,7 @@ __global__ void gaussianVertical(const uchar4* __restrict__ tmp,
 
   float4 acc = make_float4(0.f, 0.f, 0.f, 0.f);
   int ksize = 2 * radius + 1;
-  for (int k = -radius; k <= radius; ++k) {
+  for (int k = -radius; k <= ksize; ++k) {
     int yy = clampi(y + k, 0, height - 1);
     const uchar4 px = tmp[yy * stride + x];
     float w = d_kernel[k + radius];
@@ -111,8 +88,6 @@ __global__ void gaussianVertical(const uchar4* __restrict__ tmp,
   dst[y * stride + x] = out;
 }
 
-/* ---------- Host helpers ---------- */
-
 static std::vector<float> makeGaussianKernel(float sigma, int radius) {
   if (radius <= 0) {
     radius = static_cast<int>(std::ceil(3.0 * sigma));
@@ -126,7 +101,6 @@ static std::vector<float> makeGaussianKernel(float sigma, int radius) {
     k[i + radius] = w;
     sum += w;
   }
-  // normalize
   for (int i = 0; i < ksize; ++i) k[i] /= sum;
   return k;
 }
@@ -175,8 +149,6 @@ int main(int argc, char** argv) {
 
   std::vector<unsigned char> host; unsigned w=0, h=0;
   if (int e = decodePNG(inPath, host, w, h)) return e;
-
-  // Device buffers (pitched 2D to be cache-friendly).
   uchar4* d_in = nullptr;
   uchar4* d_tmp = nullptr;
   uchar4* d_out = nullptr;
