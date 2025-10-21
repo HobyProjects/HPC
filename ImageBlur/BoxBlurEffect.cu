@@ -37,7 +37,7 @@ __global__ void gaussianHorizontal(const uchar4* __restrict__ src,
 
   float4 acc = make_float4(0.f, 0.f, 0.f, 0.f);
   int ksize = 2 * radius + 1;
-  for (int k = -radius; k <= radius; ++k) {
+  for (int k = -radius; k <= ksize; ++k) {
     int xx = clampi(x + k, 0, width - 1);
     uchar4 px = row[xx];
     float w = d_kernel[k + radius];
