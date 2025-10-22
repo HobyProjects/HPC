@@ -98,9 +98,8 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[WARN]: Odd number of matrices (%d). The last one will be ignored.\n", ml.count);
     }
 
-    char out_name[4096];
-    snprintf(out_name, sizeof(out_name), output_file);
-    FILE* out = fopen(out_name, "w");
+    snprintf(output_file, sizeof(output_file), output_file);
+    FILE* out = fopen(output_file, "w");
     if (!out) {
         fprintf(stderr, "[ERROR]: Could not open output file '%s' for writing.\n", output_file);
         mat_delete_list(&ml);
