@@ -68,8 +68,13 @@ int main(int argc, char** argv) {
         }
     }
 
-    int requested_threads = 0;
+    const char* output_file = NULL;
     if (argc >= 3 && argv[2]) {
+        output_file = argv[2];
+    }
+
+    int requested_threads = 0;
+    if (argc >= 4 && argv[3]) {
         requested_threads = mat_parse_thread_count(argv[2]);
         if (requested_threads < 0) {
             printf("[WARN]: Invalid thread count. Using system/OMP default.\n");
@@ -79,6 +84,7 @@ int main(int argc, char** argv) {
 
     printf("----------------------------------------------\n");
     printf(" FILE NAME    : %s\n", file_name);
+    printf(" OUTPUT FILE  : %s\n", output_file);
     printf(" THREAD COUNT : %d\n", requested_threads);
     printf("----------------------------------------------\n");
 
@@ -92,11 +98,11 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[WARN]: Odd number of matrices (%d). The last one will be ignored.\n", ml.count);
     }
 
-    char out_name[1024];
-    snprintf(out_name, sizeof(out_name), "./results.txt");
+    char out_name[4096];
+    snprintf(out_name, sizeof(out_name), output_file);
     FILE* out = fopen(out_name, "w");
     if (!out) {
-        fprintf(stderr, "[ERROR]: Could not open output file '%s' for writing.\n", out_name);
+        fprintf(stderr, "[ERROR]: Could not open output file '%s' for writing.\n", output_file);
         mat_delete_list(&ml);
         return -4;
     }
@@ -149,9 +155,10 @@ int main(int argc, char** argv) {
 
 void mat_help() {
     printf("----------------------------------------------\n");
-    printf(" Usage: ./Matrix <file-name> <thread-count>\n");
+    printf(" Usage: ./Matrix <file-name> <output-name> [thread-count]\n");
     printf("----------------------------------------------\n");
     printf(" <file-name>     : Path to your matrix file\n");
+    printf(" <output-name>   : Path to your output file\n");
     printf(" <thread-count>  : Number of threads to use (<= biggest matrix dimension)\n");
     printf("----------------------------------------------\n");
     printf(" Example: ./Matrix MatData.txt 4\n");
