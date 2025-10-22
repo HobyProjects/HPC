@@ -99,7 +99,8 @@ int main(int argc, char** argv) {
     }
 
     char out_name[1024];
-    snprintf(out_name, sizeof(out_name), output_file);
+    const char* const final_output = output_file;
+    snprintf(out_name, sizeof(out_name), final_output);
     FILE* out = fopen(out_name, "w");
     if (!out) {
         fprintf(stderr, "[ERROR]: Could not open output file '%s' for writing.\n", out_name);
