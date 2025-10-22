@@ -1,207 +1,124 @@
+#include <stdio.h>
 #include <cuda_runtime.h>
-#include <cstdint>
-#include <cstdlib>
-#include <iostream>
-#include <string>
-#include <vector>
-#include <cmath>
+#include <math.h>
 
 #include "lodepng.h"
 
-#define CUDA_CHECK(call)                                                     \
-  do {                                                                       \
-    cudaError_t _err = (call);                                               \
-    if (_err != cudaSuccess) {                                               \
-      std::cerr << "CUDA error: " << cudaGetErrorString(_err)                \
-                << " (" << static_cast<int>(_err) << ") at " << __FILE__     \
-                << ":" << __LINE__ << "\\n";                                 \
-      std::exit(1);                                                          \
-    }                                                                        \
-  } while (0)
+#define PI 3.1415926535897932384626433832795
 
-__device__ __forceinline__ int clampi(int v, int lo, int hi) {
-  return v < lo ? lo : (v > hi ? hi : v);
+inline void gpu_assert(cudaError_t code, const char* file, int line, bool abort=true)
+{
+  if (code != cudaSuccess) {
+      fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+      if (abort) exit(code);
+  }
+}
+        
+#define CUDA_CHECK(err) { gpu_assert((err), __FILE__, __LINE__); }
+
+__device__ float coefficient(int x, int y, float sigma)
+{
+    float coeff = 1.0f / (2.0f * PI * sigma * sigma);
+    float exponent = -(x * x + y * y) / (2.0f * sigma * sigma);
+    return coeff * expf(exponent);
 }
 
-__global__ void gaussianHorizontal(const uchar4* __restrict__ src,
-                                   uchar4* __restrict__ tmp,
-                                   int width, int height, int pitch, 
-                                   const float* __restrict__ d_kernel,
-                                   int radius) {
-  int y = blockIdx.y * blockDim.y + threadIdx.y;
-  int x = blockIdx.x * blockDim.x + threadIdx.x;
-  if (x >= width || y >= height) return;
+__global__ void box_blur_effect(unsigned char* input, unsigned char* output, int width, int height, int maxRadius)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= width || y >= height) return;
 
-  const int stride = pitch / sizeof(uchar4);
-  const uchar4* row = src + y * stride;
+    float cx = width / 2.0f;
+    float cy = height / 2.0f;
+    float dx = x - cx;
+    float dy = y - cy;
+    float dist = sqrtf(dx * dx + dy * dy);
+    float maxDist = sqrtf(cx * cx + cy * cy);
 
-  float4 acc = make_float4(0.f, 0.f, 0.f, 0.f);
-  int ksize = 2 * radius + 1;
-  for (int k = -radius; k <= ksize; ++k) {
-    int xx = clampi(x + k, 0, width - 1);
-    uchar4 px = row[xx];
-    float w = d_kernel[k + radius];
-    acc.x += w * px.x;
-    acc.y += w * px.y;
-    acc.z += w * px.z;
-    acc.w += w * px.w;
-  }
+    int radius = (int)(maxRadius * (dist / maxDist));
+    if (radius < 1) {
+        int idx = 4 * (y * width + x);
+        output[idx + 0] = input[idx + 0];
+        output[idx + 1] = input[idx + 1];
+        output[idx + 2] = input[idx + 2];
+        output[idx + 3] = input[idx + 3];
+        return;
+    }
 
-  uchar4 out;
-  out.x = static_cast<unsigned char>(fminf(fmaxf(acc.x, 0.f), 255.f));
-  out.y = static_cast<unsigned char>(fminf(fmaxf(acc.y, 0.f), 255.f));
-  out.z = static_cast<unsigned char>(fminf(fmaxf(acc.z, 0.f), 255.f));
-  out.w = static_cast<unsigned char>(fminf(fmaxf(acc.w, 0.f), 255.f));
+    float sigma = radius / 2.0f;
+    float4 sum = make_float4(0, 0, 0, 0);
+    float totalWeight = 0.0f;
 
-  tmp[y * stride + x] = out;
+    for (int ky = -radius; ky <= radius; ky++) {
+        for (int kx = -radius; kx <= radius; kx++) {
+            int nx = min(max(x + kx, 0), width - 1);
+            int ny = min(max(y + ky, 0), height - 1);
+            int nIdx = 4 * (ny * width + nx);
+
+            float w = coefficient(kx, ky, sigma);
+            sum.x += input[nIdx + 0] * w;
+            sum.y += input[nIdx + 1] * w;
+            sum.z += input[nIdx + 2] * w;
+            sum.w += input[nIdx + 3] * w;
+            totalWeight += w;
+        }
+    }
+
+    int outIdx = 4 * (y * width + x);
+    output[outIdx + 0] = (unsigned char)(sum.x / totalWeight);
+    output[outIdx + 1] = (unsigned char)(sum.y / totalWeight);
+    output[outIdx + 2] = (unsigned char)(sum.z / totalWeight);
+    output[outIdx + 3] = (unsigned char)(sum.w / totalWeight);
 }
 
-__global__ void gaussianVertical(const uchar4* __restrict__ tmp,
-                                 uchar4* __restrict__ dst,
-                                 int width, int height, int pitch,
-                                 const float* __restrict__ d_kernel,
-                                 int radius) {
-  int y = blockIdx.y * blockDim.y + threadIdx.y;
-  int x = blockIdx.x * blockDim.x + threadIdx.x;
-  if (x >= width || y >= height) return;
+int main(int argc, char* argv[])
+{
+    if (argc < 3) {
+        printf("Usage: %s <input.png> <output.png> [maxRadius]\n", argv[0]);
+        return 1;
+    }
 
-  const int stride = pitch / sizeof(uchar4);
+    const char* inputFilename = argv[1];
+    const char* outputFilename = argv[2];
+    int maxRadius = (argc > 3) ? atoi(argv[3]) : 30;
 
-  float4 acc = make_float4(0.f, 0.f, 0.f, 0.f);
-  int ksize = 2 * radius + 1;
-  for (int k = -radius; k <= ksize; ++k) {
-    int yy = clampi(y + k, 0, height - 1);
-    const uchar4 px = tmp[yy * stride + x];
-    float w = d_kernel[k + radius];
-    acc.x += w * px.x;
-    acc.y += w * px.y;
-    acc.z += w * px.z;
-    acc.w += w * px.w;
-  }
+    unsigned char* image = nullptr;
+    unsigned width, height;
+    unsigned error = lodepng_decode32_file(&image, &width, &height, inputFilename);
+    if (error) {
+        printf("Decoder error %u: %s\n", error, lodepng_error_text(error));
+        return 1;
+    }
 
-  uchar4 out;
-  out.x = static_cast<unsigned char>(fminf(fmaxf(acc.x, 0.f), 255.f));
-  out.y = static_cast<unsigned char>(fminf(fmaxf(acc.y, 0.f), 255.f));
-  out.z = static_cast<unsigned char>(fminf(fmaxf(acc.z, 0.f), 255.f));
-  out.w = static_cast<unsigned char>(fminf(fmaxf(acc.w, 0.f), 255.f));
+    size_t imageSize = width * height * 4;
+    unsigned char *d_input, *d_output;
+    CUDA_CHECK(cudaMalloc(&d_input, imageSize));
+    CUDA_CHECK(cudaMalloc(&d_output, imageSize));
+    CUDA_CHECK(cudaMemcpy(d_input, image, imageSize, cudaMemcpyHostToDevice));
 
-  dst[y * stride + x] = out;
-}
+    dim3 block(16, 16);
+    dim3 grid((width + block.x - 1) / block.x,
+              (height + block.y - 1) / block.y);
 
-static std::vector<float> makeGaussianKernel(float sigma, int radius) {
-  if (radius <= 0) {
-    radius = static_cast<int>(std::ceil(3.0 * sigma));
-  }
-  const int ksize = 2 * radius + 1;
-  std::vector<float> k(ksize);
-  const float twoSigma2 = 2.0f * sigma * sigma;
-  float sum = 0.f;
-  for (int i = -radius; i <= radius; ++i) {
-    float w = std::exp(-(i * i) / twoSigma2);
-    k[i + radius] = w;
-    sum += w;
-  }
-  for (int i = 0; i < ksize; ++i) k[i] /= sum;
-  return k;
-}
+    printf("Applying Gaussian blur (max radius = %d)...\n", maxRadius);
+    box_blur_effect<<<grid, block>>>(d_input, d_output, width, height, maxRadius);
+    CUDA_CHECK(cudaPeekAtLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
 
-static int decodePNG(const std::string& path, std::vector<unsigned char>& out,
-                     unsigned& w, unsigned& h) {
-  unsigned err = lodepng::decode(out, w, h, path);
-  if (err) {
-    std::cerr << "PNG decode error " << err << ": "
-              << lodepng_error_text(err) << "\\n";
-    return 1;
-  }
-  if (out.size() != w * h * 4) {
-    std::cerr << "Unexpected PNG format (not RGBA8)\\n";
-    return 2;
-  }
-  return 0;
-}
+    unsigned char* output = (unsigned char*)malloc(imageSize);
+    CUDA_CHECK(cudaMemcpy(output, d_output, imageSize, cudaMemcpyDeviceToHost));
 
-static int encodePNG(const std::string& path, const std::vector<unsigned char>& data,
-                     unsigned w, unsigned h) {
-  unsigned err = lodepng::encode(path, data, w, h);
-  if (err) {
-    std::cerr << "PNG encode error " << err << ": "
-              << lodepng_error_text(err) << "\\n";
-    return 1;
-  }
-  return 0;
-}
+    unsigned encodeError = lodepng_encode32_file(outputFilename, output, width, height);
+    if (encodeError)
+        printf("Encoder error %u: %s\n", encodeError, lodepng_error_text(encodeError));
+    else
+        printf("Saved blurred image to %s\n", outputFilename);
 
-int main(int argc, char** argv) {
-  if (argc < 4) {
-    std::cerr << "Usage: " << argv[0] << " input.png output.png sigma [radius]\\n";
-    return 1;
-  }
-  const std::string inPath = argv[1];
-  const std::string outPath = argv[2];
-  const float sigma = std::stof(argv[3]);
-  int radius = 0;
-  if (argc >= 5) radius = std::stoi(argv[4]);
+    cudaFree(d_input);
+    cudaFree(d_output);
+    free(image);
+    free(output);
 
-  if (sigma <= 0.f) {
-    std::cerr << "Sigma must be > 0\\n";
-    return 1;
-  }
-
-  std::vector<unsigned char> host; unsigned w=0, h=0;
-  if (int e = decodePNG(inPath, host, w, h)) return e;
-  uchar4* d_in = nullptr;
-  uchar4* d_tmp = nullptr;
-  uchar4* d_out = nullptr;
-  size_t pitch = 0;
-  CUDA_CHECK(cudaMallocPitch(&d_in, &pitch, w * sizeof(uchar4), h));
-  CUDA_CHECK(cudaMallocPitch(&d_tmp, &pitch, w * sizeof(uchar4), h));
-  CUDA_CHECK(cudaMallocPitch(&d_out, &pitch, w * sizeof(uchar4), h));
-
-  // Copy input to device
-  CUDA_CHECK(cudaMemcpy2D(d_in, pitch, host.data(), w * sizeof(uchar4),
-                          w * sizeof(uchar4), h, cudaMemcpyHostToDevice));
-
-  // Build Gaussian kernel and upload
-  auto h_kernel = makeGaussianKernel(sigma, radius);
-  radius = (int)h_kernel.size() / 2; // ensure consistent with computed radius
-  float* d_kernel = nullptr;
-  CUDA_CHECK(cudaMalloc(&d_kernel, h_kernel.size() * sizeof(float)));
-  CUDA_CHECK(cudaMemcpy(d_kernel, h_kernel.data(),
-                        h_kernel.size() * sizeof(float), cudaMemcpyHostToDevice));
-
-  // Launch configuration
-  dim3 block(32, 8);
-  dim3 grid((w + block.x - 1) / block.x, (h + block.y - 1) / block.y);
-
-  // Horizontal then vertical
-  gaussianHorizontal<<<grid, block>>>(d_in, d_tmp, (int)w, (int)h, (int)pitch, d_kernel, radius);
-  CUDA_CHECK(cudaGetLastError());
-  gaussianVertical<<<grid, block>>>(d_tmp, d_out, (int)w, (int)h, (int)pitch, d_kernel, radius);
-  CUDA_CHECK(cudaGetLastError());
-  CUDA_CHECK(cudaDeviceSynchronize());
-
-  // Copy back
-  std::vector<unsigned char> out(host.size());
-  CUDA_CHECK(cudaMemcpy2D(out.data(), w * sizeof(uchar4), d_out, pitch,
-                          w * sizeof(uchar4), h, cudaMemcpyDeviceToHost));
-
-  // Save
-  if (int e = encodePNG(outPath, out, w, h)) {
-    CUDA_CHECK(cudaFree(d_in));
-    CUDA_CHECK(cudaFree(d_tmp));
-    CUDA_CHECK(cudaFree(d_out));
-    CUDA_CHECK(cudaFree(d_kernel));
-    return e;
-  }
-
-  // Cleanup
-  CUDA_CHECK(cudaFree(d_in));
-  CUDA_CHECK(cudaFree(d_tmp));
-  CUDA_CHECK(cudaFree(d_out));
-  CUDA_CHECK(cudaFree(d_kernel));
-
-  std::cout << "Gaussian-blurred " << inPath << " -> " << outPath
-            << " (" << w << "x" << h << "), sigma=" << sigma
-            << ", radius=" << radius << "\\n";
-  return 0;
+    return 0;
 }

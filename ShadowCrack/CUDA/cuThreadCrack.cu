@@ -1,8 +1,3 @@
-// cuThreadCrack_fixed.cu
-// Pure C + CUDA (.cu) version (fixed). GPU generates candidate strings, CPU uses crypt_r to compare.
-// Compile: nvcc -O3 cuThreadCrack_fixed.cu -o cuThreadCrack_fixed -lcrypt
-// Usage: ./cuThreadCrack_fixed <password> [threads_per_block] [max_len] [batch_size]
-
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -21,27 +16,22 @@
 #error "Compile with nvcc (CUDA compiler)"
 #endif
 
-/* ---------- CONFIG ---------- */
 #define DEFAULT_TPB        256
 #define DEFAULT_MAXLEN     6
 #define MAX_CAND_LEN       32
-#define DEFAULT_BATCH_SIZE (1<<20)   /* 1,048,576 */
-#define DISPLAY_INTERVAL_NS 200000000L /* 0.2s */
+#define DEFAULT_BATCH_SIZE (1<<20)  
+#define DISPLAY_INTERVAL_NS 200000000L 
 
-/* charset */
 static const char HOST_CHARSET[] =
   "abcdefghijklmnopqrstuvwxyz"
   "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
   "0123456789";
+
 static const int HOST_CHARSET_LEN = (int)(sizeof(HOST_CHARSET)-1);
 
-/* Put charset & len in device constant memory */
 __constant__ char DEV_CHARSET[ sizeof(HOST_CHARSET) ];
 __constant__ int  DEV_CHARSET_LEN;
-
-/* ---------- device helpers ---------- */
 __device__ __forceinline__ void idx_to_candidate_u64(uint64_t idx, int len, char* out) {
-    /* out must have room for len (no NUL here) */
     for (int pos = len - 1; pos >= 0; --pos) {
         int sel = (int)(idx % (uint64_t)DEV_CHARSET_LEN);
         out[pos] = DEV_CHARSET[sel];
@@ -53,20 +43,18 @@ __global__ void generate_candidates_kernel(
     uint64_t start_index,
     uint32_t count,
     int len,
-    char* out,       /* flat buffer: count * stride */
-    uint32_t stride) /* stride = max_stride used by host */
+    char* out,      
+    uint32_t stride) 
 {
     uint64_t gtid = (uint64_t)blockIdx.x * blockDim.x + (uint64_t)threadIdx.x;
     if (gtid >= count) return;
 
     uint64_t idx = start_index + gtid;
     char* dst = out + (size_t)gtid * (size_t)stride;
-    /* write candidate */
     idx_to_candidate_u64(idx, len, dst);
     dst[len] = '\0';
 }
 
-/* ---------- host helpers ---------- */
 static uint64_t pow_u64_host(uint64_t base, int exp) {
     uint64_t r = 1;
     for (int i = 0; i < exp; ++i) {
@@ -77,11 +65,10 @@ static uint64_t pow_u64_host(uint64_t base, int exp) {
 }
 
 static double timespec_diff_s(const struct timespec *a, const struct timespec *b) {
-    /* a - b in seconds */
     return (double)(a->tv_sec - b->tv_sec) + (double)(a->tv_nsec - b->tv_nsec) / 1e9;
 }
 
-/* ---------- main ---------- */
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <password> [threads_per_block] [max_len] [batch_size]\n", argv[0]);
@@ -98,8 +85,7 @@ int main(int argc, char** argv) {
     if (maxlen > MAX_CAND_LEN) maxlen = MAX_CAND_LEN;
     if (batch_size == 0) batch_size = DEFAULT_BATCH_SIZE;
 
-    /* salt / target */
-    const char* salt_prefix = "$5$sHaDoW_CraCKsalt$"; /* SHA-256 crypt (glibc $5$) */
+    const char* salt_prefix = "$5$AbfFA234fFCfgh4&92$"; 
     char* target_hash = crypt(password, salt_prefix);
     if (target_hash == NULL) {
         perror("crypt");
@@ -111,7 +97,6 @@ int main(int argc, char** argv) {
     printf("Charset size: %d\n", HOST_CHARSET_LEN);
     printf("Starting GPU-assisted brute-force (Ctrl+C to abort)...\n\n");
 
-    /* copy charset to device const memory */
     cudaError_t cerr;
     cerr = cudaMemcpyToSymbol(DEV_CHARSET, HOST_CHARSET, sizeof(HOST_CHARSET));
     if (cerr != cudaSuccess) {
@@ -124,8 +109,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    /* allocate host & device buffers.
-       We'll allocate stride = MAX_CAND_LEN+1 so indexing is simple. */
     const uint32_t max_stride = (uint32_t)(MAX_CAND_LEN + 1);
     size_t host_bytes = (size_t)batch_size * (size_t)max_stride;
     char* h_buf = (char*) malloc(host_bytes);
@@ -148,7 +131,6 @@ int main(int argc, char** argv) {
     char last_combo[MAX_CAND_LEN+1];
     last_combo[0] = '\0';
 
-    /* --- Move these declarations up so goto doesn't bypass init --- */
     struct timespec t_start, t_last_print, t_now;
     double total_elapsed = 0.0;
     double avg_rate = 0.0;
@@ -159,7 +141,6 @@ int main(int argc, char** argv) {
     struct crypt_data cdata;
     memset(&cdata, 0, sizeof(cdata));
 
-    /* iterate lengths */
     for (int len = 1; len <= maxlen && !found; ++len) {
         uint64_t total = pow_u64_host((uint64_t)HOST_CHARSET_LEN, len);
         if (total == UINT64_MAX) {
@@ -174,7 +155,6 @@ int main(int argc, char** argv) {
             uint32_t this_count = (uint32_t)((start + batch_size <= total) ? batch_size : (total - start));
             uint32_t blocks = (this_count + (uint32_t)threads_per_block - 1) / (uint32_t)threads_per_block;
 
-            /* launch kernel to generate candidates */
             generate_candidates_kernel<<<(size_t)blocks, (size_t)threads_per_block>>>(start, this_count, len, d_buf, max_stride);
             cerr = cudaGetLastError();
             if (cerr != cudaSuccess) {
@@ -182,7 +162,6 @@ int main(int argc, char** argv) {
                 goto cleanup;
             }
 
-            /* copy back */
             size_t copy_bytes = (size_t)this_count * (size_t)max_stride;
             cerr = cudaMemcpy(h_buf, d_buf, copy_bytes, cudaMemcpyDeviceToHost);
             if (cerr != cudaSuccess) {
@@ -190,13 +169,10 @@ int main(int argc, char** argv) {
                 goto cleanup;
             }
 
-            /* check each candidate using crypt_r */
             uint32_t i;
             for (i = 0; i < this_count; ++i) {
                 char* cand = h_buf + (size_t)i * (size_t)max_stride;
-                /* ensure NUL (kernel wrote it, but being cautious) */
                 cand[len] = '\0';
-                /* keep last tried */
                 strncpy(last_combo, cand, MAX_CAND_LEN);
                 last_combo[MAX_CAND_LEN] = '\0';
 
@@ -210,7 +186,6 @@ int main(int argc, char** argv) {
                     break;
                 }
 
-                /* display progress occasionally */
                 clock_gettime(CLOCK_MONOTONIC, &t_now);
                 long dnsec = (t_now.tv_sec - t_last_print.tv_sec) * 1000000000L + (t_now.tv_nsec - t_last_print.tv_nsec);
                 if (dnsec >= DISPLAY_INTERVAL_NS) {
@@ -236,7 +211,6 @@ int main(int argc, char** argv) {
         printf("No match found up to length %d\n", maxlen);
     }
 
-    /* final stats */
     clock_gettime(CLOCK_MONOTONIC, &t_now);
     total_elapsed = timespec_diff_s(&t_now, &t_start);
     avg_rate = (total_elapsed > 0.0) ? ((double)attempts / total_elapsed) : 0.0;
