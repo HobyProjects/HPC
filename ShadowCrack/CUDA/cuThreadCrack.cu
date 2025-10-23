@@ -1,5 +1,3 @@
-// Shadow Crack using CUDA (CUDA 12.2+ compatible)
-
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -13,15 +11,12 @@
 #include <unistd.h>
 #include <errno.h>
 #include <crypt.h>
-
-// --- CUDA headers (required on CUDA 12.x+)
 #include <cuda_runtime.h>
 
 #ifndef __CUDACC__
 #error "Compile with nvcc (CUDA compiler)"
 #endif
 
-// Require CUDA Runtime 12.2 or newer
 #ifndef CUDART_VERSION
 #error "CUDART_VERSION not defined — are you compiling with nvcc?"
 #endif
@@ -29,14 +24,12 @@
 #error "This program requires CUDA 12.2 or newer."
 #endif
 
-// ---------------- Config ----------------
 #define DEFAULT_TPB            256
 #define DEFAULT_MAXLEN         6
 #define MAX_CAND_LEN           32
 #define DEFAULT_BATCH_SIZE     (1u<<20)  // 1,048,576
 #define DISPLAY_INTERVAL_NS    200000000L
 
-// ---------------- Charset ----------------
 static const char HOST_CHARSET[] =
     "abcdefghijklmnopqrstuvwxyz"
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -44,15 +37,13 @@ static const char HOST_CHARSET[] =
 
 static const int HOST_CHARSET_LEN = (int)(sizeof(HOST_CHARSET) - 1);
 
-// Device constants
 __constant__ char DEV_CHARSET[ sizeof(HOST_CHARSET) ];
 __constant__ int  DEV_CHARSET_LEN;
 
-// ---------------- Utilities ----------------
 static inline uint64_t pow_u64_host(uint64_t base, int exp) {
     uint64_t r = 1;
     for (int i = 0; i < exp; ++i) {
-        if (r > UINT64_MAX / base) return UINT64_MAX; // overflow clamp
+        if (r > UINT64_MAX / base) return UINT64_MAX; 
         r *= base;
     }
     return r;
@@ -69,9 +60,7 @@ static inline void cuda_or_die(cudaError_t err, const char* what) {
     }
 }
 
-// ---------------- Device code ----------------
 __device__ __forceinline__ void idx_to_candidate_u64(uint64_t idx, int len, char* out) {
-    // Base-N index -> string over DEV_CHARSET
     for (int pos = len - 1; pos >= 0; --pos) {
         int sel = (int)(idx % (uint64_t)DEV_CHARSET_LEN);
         out[pos] = DEV_CHARSET[sel];
@@ -95,7 +84,6 @@ __global__ void generate_candidates_kernel(
     dst[len] = '\0';
 }
 
-// ---------------- Main ----------------
 int main(int argc, char** argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <password> [threads_per_block] [max_len] [batch_size]\n", argv[0]);
@@ -112,8 +100,7 @@ int main(int argc, char** argv) {
     if (maxlen > MAX_CAND_LEN) maxlen = MAX_CAND_LEN;
     if (batch_size == 0u) batch_size = DEFAULT_BATCH_SIZE;
 
-    // Hash the provided password with SHA-256 ($5$) to get target
-    const char* const salt_prefix = "$5$"; // glibc crypt: $5$ = SHA-256
+    const char* const salt_prefix = "$5$"; 
     char* target_hash = crypt(password, salt_prefix);
     if (target_hash == NULL) {
         perror("crypt");
@@ -129,21 +116,18 @@ int main(int argc, char** argv) {
     printf("CUDA runtime version: %d\n", CUDART_VERSION);
     printf("---------------------------------------------------------------------\n");
 
-    // Copy constants to device
     cuda_or_die(cudaMemcpyToSymbol(DEV_CHARSET,     HOST_CHARSET,     sizeof(HOST_CHARSET), 0, cudaMemcpyHostToDevice), "cudaMemcpyToSymbol(DEV_CHARSET)");
     cuda_or_die(cudaMemcpyToSymbol(DEV_CHARSET_LEN, &HOST_CHARSET_LEN, sizeof(int),          0, cudaMemcpyHostToDevice), "cudaMemcpyToSymbol(DEV_CHARSET_LEN)");
 
     const uint32_t max_stride = (uint32_t)(MAX_CAND_LEN + 1);
     const size_t   host_bytes = (size_t)batch_size * (size_t)max_stride;
 
-    // Host buffer (pageable is fine; you can switch to pinned for more speed)
     char* h_buf = (char*) malloc(host_bytes);
     if (!h_buf) {
         fprintf(stderr, "malloc host buffer failed (size=%zu)\n", host_bytes);
         return 1;
     }
 
-    // Device buffer
     char* d_buf = NULL;
     cuda_or_die(cudaMalloc((void**)&d_buf, host_bytes), "cudaMalloc(d_buf)");
 
@@ -156,7 +140,6 @@ int main(int argc, char** argv) {
     clock_gettime(CLOCK_MONOTONIC, &t_start);
     t_last_print = t_start;
 
-    // ↓↓↓ declare these BEFORE any possible 'goto cleanup'
     double total_elapsed = 0.0;
     double avg_rate = 0.0;
 
@@ -187,7 +170,7 @@ int main(int argc, char** argv) {
             cudaError_t kerr = cudaDeviceSynchronize();
             if (kerr != cudaSuccess) {
                 fprintf(stderr, "Kernel failed: %s\n", cudaGetErrorString(kerr));
-                goto cleanup;  // now legal: we’re not skipping any new initializations
+                goto cleanup; 
             }
 
             const size_t copy_bytes = (size_t)this_count * (size_t)stride;
@@ -229,7 +212,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    // compute after all jumps are done
     clock_gettime(CLOCK_MONOTONIC, &t_now);
     total_elapsed = timespec_diff_s(&t_now, &t_start);
     avg_rate = (total_elapsed > 0.0) ? ((double)attempts / total_elapsed) : 0.0;
