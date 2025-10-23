@@ -156,6 +156,10 @@ int main(int argc, char** argv) {
     clock_gettime(CLOCK_MONOTONIC, &t_start);
     t_last_print = t_start;
 
+    // ↓↓↓ declare these BEFORE any possible 'goto cleanup'
+    double total_elapsed = 0.0;
+    double avg_rate = 0.0;
+
     struct crypt_data cdata;
     memset(&cdata, 0, sizeof(cdata));
 
@@ -175,30 +179,24 @@ int main(int argc, char** argv) {
                                         ? batch_size
                                         : (uint32_t)remaining;
 
-            // Grid config (note: CUDA expects unsigned int for blocks/threads)
             const unsigned int tpb = (unsigned int)threads_per_block;
             const unsigned int blocks = (unsigned int)((this_count + tpb - 1u) / tpb);
 
-            // Launch
             generate_candidates_kernel<<<blocks, tpb>>>(start, this_count, len, d_buf, stride);
 
-            // Synchronize + check
             cudaError_t kerr = cudaDeviceSynchronize();
             if (kerr != cudaSuccess) {
                 fprintf(stderr, "Kernel failed: %s\n", cudaGetErrorString(kerr));
-                goto cleanup;
+                goto cleanup;  // now legal: we’re not skipping any new initializations
             }
 
-            // Copy back
             const size_t copy_bytes = (size_t)this_count * (size_t)stride;
             cuda_or_die(cudaMemcpy(h_buf, d_buf, copy_bytes, cudaMemcpyDeviceToHost), "cudaMemcpy(D2H)");
 
-            // CPU side hashing check
             for (uint32_t i = 0; i < this_count; ++i) {
                 char* cand = h_buf + (size_t)i * (size_t)stride;
                 cand[len] = '\0';
 
-                // Keep last combo for progress
                 strncpy(last_combo, cand, MAX_CAND_LEN);
                 last_combo[MAX_CAND_LEN] = '\0';
 
@@ -212,9 +210,9 @@ int main(int argc, char** argv) {
                     break;
                 }
 
-                // Progress pulse
                 clock_gettime(CLOCK_MONOTONIC, &t_now);
-                long dnsec = (t_now.tv_sec - t_last_print.tv_sec) * 1000000000L + (t_now.tv_nsec - t_last_print.tv_nsec);
+                long dnsec = (t_now.tv_sec - t_last_print.tv_sec) * 1000000000L
+                           + (t_now.tv_nsec - t_last_print.tv_nsec);
                 if (dnsec >= DISPLAY_INTERVAL_NS) {
                     double elapsed = timespec_diff_s(&t_now, &t_start);
                     double rate = (elapsed > 0.0) ? ((double)attempts / elapsed) : 0.0;
@@ -231,10 +229,10 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Summary
+    // compute after all jumps are done
     clock_gettime(CLOCK_MONOTONIC, &t_now);
-    const double total_elapsed = timespec_diff_s(&t_now, &t_start);
-    const double avg_rate = (total_elapsed > 0.0) ? ((double)attempts / total_elapsed) : 0.0;
+    total_elapsed = timespec_diff_s(&t_now, &t_start);
+    avg_rate = (total_elapsed > 0.0) ? ((double)attempts / total_elapsed) : 0.0;
 
     printf("\n\n---------------------------------------------------------------------\n");
     if (found) {
@@ -242,7 +240,8 @@ int main(int argc, char** argv) {
     } else {
         printf("No match found up to length %d\n", maxlen);
     }
-    printf("Total attempts: %" PRIu64 "  Time: %.2fs  Avg rate: %.0f/sec\n", attempts, total_elapsed, avg_rate);
+    printf("Total attempts: %" PRIu64 "  Time: %.2fs  Avg rate: %.0f/sec\n",
+           attempts, total_elapsed, avg_rate);
     printf("---------------------------------------------------------------------\n");
 
 cleanup:
