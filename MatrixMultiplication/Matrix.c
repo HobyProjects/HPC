@@ -75,7 +75,7 @@ int main(int argc, char** argv) {
 
     int requested_threads = 0;
     if (argc >= 4 && argv[3]) {
-        requested_threads = mat_parse_thread_count(argv[2]);
+        requested_threads = mat_parse_thread_count(argv[3]);
         if (requested_threads < 0) {
             printf("[WARN]: Invalid thread count. Using system/OMP default.\n");
             requested_threads = 0;
