@@ -105,7 +105,7 @@ int main(int argc, char **argv) {
     if (maxlen < 1) maxlen = DEFAULT_MAXLEN;
     if (maxlen > MAX_CAND_LEN) maxlen = MAX_CAND_LEN;
 
-    const char *salt_prefix = "$5$"; // SHA256
+    const char *salt_prefix = "$5$SALT"; // SHA256
     char *target_hash = crypt(password, salt_prefix);
     if (!target_hash) {
         perror("crypt");
@@ -173,9 +173,6 @@ int main(int argc, char **argv) {
         fflush(stdout);
 
         last_attempts = cur_attempts;
-        printf("\r---------------------------------------------------------------------\n");
-        printf("\rStarting brute-force (press Ctrl+C to abort)...\n\n");
-        printf("\r---------------------------------------------------------------------\n");
     }
 
     printf("\n\n");

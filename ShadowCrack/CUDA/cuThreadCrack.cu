@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
     if (maxlen > MAX_CAND_LEN) maxlen = MAX_CAND_LEN;
     if (batch_size == 0) batch_size = DEFAULT_BATCH_SIZE;
 
-    const char* salt_prefix = "$5$"; 
+    const char* salt_prefix = "$5$SALT"; 
     char* target_hash = crypt(password, salt_prefix);
     if (target_hash == NULL) {
         perror("crypt");
@@ -205,9 +205,6 @@ int main(int argc, char** argv) {
             }
 
             start += this_count;
-            printf("\r---------------------------------------------------------------------\n");
-            printf("\rStarting GPU-assisted brute-force (Ctrl+C to abort)...\n\n");
-            printf("\r---------------------------------------------------------------------\n");
         }
     }
 
