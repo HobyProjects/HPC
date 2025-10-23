@@ -1,124 +1,157 @@
-#include <stdio.h>
-#include <cuda_runtime.h>
-#include <math.h>
+#include <cstdio>
+#include <cstdlib>
+#include <vector>
+#include <string>
+#include <algorithm>
 
-#include "lodepng.h"
+#include "lodepng.h" 
 
-#define PI 3.1415926535897932384626433832795
-
-inline void gpu_assert(cudaError_t code, const char* file, int line, bool abort=true)
-{
-  if (code != cudaSuccess) {
-      fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
-      if (abort) exit(code);
-  }
-}
-        
-#define CUDA_CHECK(err) { gpu_assert((err), __FILE__, __LINE__); }
-
-__device__ float coefficient(int x, int y, float sigma)
-{
-    float coeff = 1.0f / (2.0f * PI * sigma * sigma);
-    float exponent = -(x * x + y * y) / (2.0f * sigma * sigma);
-    return coeff * expf(exponent);
+#define CUDA_CHECK(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+inline void gpuAssert(cudaError_t code, const char *file, int line){
+    if (code != cudaSuccess){
+        fprintf(stderr, "CUDA Error %s %d: %s\n", file, line, cudaGetErrorString(code));
+        exit(EXIT_FAILURE);
+    }
 }
 
-__global__ void box_blur_effect(unsigned char* input, unsigned char* output, int width, int height, int maxRadius)
-{
+__device__ __forceinline__ int clampi(int v, int lo, int hi){
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+__global__ void boxBlurKernel(const unsigned char* __restrict__ in,
+                              unsigned char* __restrict__ out,
+                              int width, int height, int halfKernelSize){
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
 
-    float cx = width / 2.0f;
-    float cy = height / 2.0f;
-    float dx = x - cx;
-    float dy = y - cy;
-    float dist = sqrtf(dx * dx + dy * dy);
-    float maxDist = sqrtf(cx * cx + cy * cy);
+    const int kernelSize = 2 * halfKernelSize + 1;
+    const int startX = x - halfKernelSize;
+    const int startY = y - halfKernelSize;
 
-    int radius = (int)(maxRadius * (dist / maxDist));
-    if (radius < 1) {
-        int idx = 4 * (y * width + x);
-        output[idx + 0] = input[idx + 0];
-        output[idx + 1] = input[idx + 1];
-        output[idx + 2] = input[idx + 2];
-        output[idx + 3] = input[idx + 3];
-        return;
-    }
+    int sumR = 0, sumG = 0, sumB = 0, sumA = 0;
+    int count = 0;
 
-    float sigma = radius / 2.0f;
-    float4 sum = make_float4(0, 0, 0, 0);
-    float totalWeight = 0.0f;
-
-    for (int ky = -radius; ky <= radius; ky++) {
-        for (int kx = -radius; kx <= radius; kx++) {
-            int nx = min(max(x + kx, 0), width - 1);
-            int ny = min(max(y + ky, 0), height - 1);
-            int nIdx = 4 * (ny * width + nx);
-
-            float w = coefficient(kx, ky, sigma);
-            sum.x += input[nIdx + 0] * w;
-            sum.y += input[nIdx + 1] * w;
-            sum.z += input[nIdx + 2] * w;
-            sum.w += input[nIdx + 3] * w;
-            totalWeight += w;
+    for (int j = 0; j < kernelSize; ++j){
+        int yy = clampi(startY + j, 0, height - 1);
+        for (int i = 0; i < kernelSize; ++i){
+            int xx = clampi(startX + i, 0, width - 1);
+            int idx = (yy * width + xx) * 4;
+            sumR += in[idx + 0];
+            sumG += in[idx + 1];
+            sumB += in[idx + 2];
+            sumA += in[idx + 3];
+            ++count;
         }
     }
 
-    int outIdx = 4 * (y * width + x);
-    output[outIdx + 0] = (unsigned char)(sum.x / totalWeight);
-    output[outIdx + 1] = (unsigned char)(sum.y / totalWeight);
-    output[outIdx + 2] = (unsigned char)(sum.z / totalWeight);
-    output[outIdx + 3] = (unsigned char)(sum.w / totalWeight);
+    int outIdx = (y * width + x) * 4;
+    out[outIdx + 0] = static_cast<unsigned char>(sumR / count);
+    out[outIdx + 1] = static_cast<unsigned char>(sumG / count);
+    out[outIdx + 2] = static_cast<unsigned char>(sumB / count);
+    out[outIdx + 3] = static_cast<unsigned char>(sumA / count);
 }
 
-int main(int argc, char* argv[])
-{
-    if (argc < 3) {
-        printf("Usage: %s <input.png> <output.png> [maxRadius]\n", argv[0]);
-        return 1;
+/*
+__global__ void boxBlurHorizontal(const unsigned char* __restrict__ in,
+                                  unsigned char* __restrict__ tmp,
+                                  int width, int height, int halfKernelSize){
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= width || y >= height) return;
+
+    const int kernelSize = 2 * halfKernelSize + 1;
+    const int startX = x - halfKernelSize;
+
+    int sumR=0,sumG=0,sumB=0,sumA=0; int count=0;
+    for (int i = 0; i < kernelSize; ++i){
+        int xx = clampi(startX + i, 0, width - 1);
+        int idx = (y * width + xx) * 4;
+        sumR += in[idx+0]; sumG += in[idx+1]; sumB += in[idx+2]; sumA += in[idx+3];
+        ++count;
+    }
+    int outIdx = (y * width + x) * 4;
+    tmp[outIdx+0] = sumR / count; tmp[outIdx+1] = sumG / count; tmp[outIdx+2] = sumB / count; tmp[outIdx+3] = sumA / count;
+}
+
+__global__ void boxBlurVertical(const unsigned char* __restrict__ tmp,
+                                unsigned char* __restrict__ out,
+                                int width, int height, int halfKernelSize){
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= width || y >= height) return;
+
+    const int kernelSize = 2 * halfKernelSize + 1;
+    const int startY = y - halfKernelSize;
+
+    int sumR=0,sumG=0,sumB=0,sumA=0; int count=0;
+    for (int j = 0; j < kernelSize; ++j){
+        int yy = clampi(startY + j, 0, height - 1);
+        int idx = (yy * width + x) * 4;
+        sumR += tmp[idx+0]; sumG += tmp[idx+1]; sumB += tmp[idx+2]; sumA += tmp[idx+3];
+        ++count;
+    }
+    int outIdx = (y * width + x) * 4;
+    out[outIdx+0] = sumR / count; out[outIdx+1] = sumG / count; out[outIdx+2] = sumB / count; out[outIdx+3] = sumA / count;
+}
+*/
+
+int main(int argc, char** argv){
+    if (argc < 4){
+        fprintf(stderr, "Usage: %s <input.png> <output.png> <halfKernelSize>\n", argv[0]);
+        return EXIT_FAILURE;
     }
 
-    const char* inputFilename = argv[1];
-    const char* outputFilename = argv[2];
-    int maxRadius = (argc > 3) ? atoi(argv[3]) : 30;
+    std::string inPath  = argv[1];
+    std::string outPath = argv[2];
+    int halfKernelSize = std::max(0, atoi(argv[3]));
 
-    unsigned char* image = nullptr;
-    unsigned width, height;
-    unsigned error = lodepng_decode32_file(&image, &width, &height, inputFilename);
-    if (error) {
-        printf("Decoder error %u: %s\n", error, lodepng_error_text(error));
-        return 1;
+    std::vector<unsigned char> image;
+    unsigned width = 0, height = 0;
+    unsigned err = lodepng::decode(image, width, height, inPath);
+    if (err){
+        fprintf(stderr, "LodePNG decode error %u: %s\n", err, lodepng_error_text(err));
+        return EXIT_FAILURE;
+    }
+    if (image.size() != width * height * 4){
+        fprintf(stderr, "Unexpected decoded size.\n");
+        return EXIT_FAILURE;
     }
 
-    size_t imageSize = width * height * 4;
-    unsigned char *d_input, *d_output;
-    CUDA_CHECK(cudaMalloc(&d_input, imageSize));
-    CUDA_CHECK(cudaMalloc(&d_output, imageSize));
-    CUDA_CHECK(cudaMemcpy(d_input, image, imageSize, cudaMemcpyHostToDevice));
+    const size_t numBytes = image.size();
 
-    dim3 block(16, 16);
-    dim3 grid((width + block.x - 1) / block.x,
-              (height + block.y - 1) / block.y);
+    unsigned char *d_in = nullptr, *d_out = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_in, numBytes));
+    CUDA_CHECK(cudaMalloc(&d_out, numBytes));
+    CUDA_CHECK(cudaMemcpy(d_in, image.data(), numBytes, cudaMemcpyHostToDevice));
 
-    printf("Applying box blur (max radius = %d)...\n", maxRadius);
-    box_blur_effect<<<grid, block>>>(d_input, d_output, width, height, maxRadius);
+    dim3 block(16,16);
+    dim3 grid((width + block.x - 1)/block.x, (height + block.y - 1)/block.y);
+
+    boxBlurKernel<<<grid, block>>>(d_in, d_out, (int)width, (int)height, halfKernelSize);
     CUDA_CHECK(cudaPeekAtLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    unsigned char* output = (unsigned char*)malloc(imageSize);
-    CUDA_CHECK(cudaMemcpy(output, d_output, imageSize, cudaMemcpyDeviceToHost));
+    std::vector<unsigned char> outHost(numBytes);
+    CUDA_CHECK(cudaMemcpy(outHost.data(), d_out, numBytes, cudaMemcpyDeviceToHost));
 
-    unsigned encodeError = lodepng_encode32_file(outputFilename, output, width, height);
-    if (encodeError)
-        printf("Encoder error %u: %s\n", encodeError, lodepng_error_text(encodeError));
-    else
-        printf("Saved blurred image to %s\n", outputFilename);
+    CUDA_CHECK(cudaFree(d_in));
+    CUDA_CHECK(cudaFree(d_out));
 
-    cudaFree(d_input);
-    cudaFree(d_output);
-    free(image);
-    free(output);
+    std::vector<unsigned char> png;
+    err = lodepng::encode(png, outHost.data(), width, height, LCT_RGBA, 8);
+    if (err){
+        fprintf(stderr, "LodePNG encode error %u: %s\n", err, lodepng_error_text(err));
+        return EXIT_FAILURE;
+    }
+    err = lodepng_save_file(png.data(), png.size(), outPath.c_str());
+    if (err){
+        fprintf(stderr, "LodePNG save error %u: %s\n", err, lodepng_error_text(err));
+        return EXIT_FAILURE;
+    }
 
-    return 0;
+    printf("wrote %s (%ux%u, halfKernelSize=%d => kernel=%dx%d)\n",
+           outPath.c_str(), width, height, halfKernelSize,
+           2*halfKernelSize+1, 2*halfKernelSize+1);
+    return EXIT_SUCCESS;
 }
