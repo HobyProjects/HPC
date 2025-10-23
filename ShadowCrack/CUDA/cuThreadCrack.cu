@@ -85,17 +85,21 @@ int main(int argc, char** argv) {
     if (maxlen > MAX_CAND_LEN) maxlen = MAX_CAND_LEN;
     if (batch_size == 0) batch_size = DEFAULT_BATCH_SIZE;
 
-    const char* salt_prefix = "$5$AbfFA234fFCfgh4&92$"; 
+    const char* salt_prefix = "$5$"; 
     char* target_hash = crypt(password, salt_prefix);
     if (target_hash == NULL) {
         perror("crypt");
         return 1;
     }
 
+
+    printf("---------------------------------------------------------------------\n");
+    printf("                     Shadow Crack using CUDA                         \n");
+    printf("---------------------------------------------------------------------\n");
     printf("Target hash: %s\n", target_hash);
-    printf("TPB: %d  maxlen: %d  batch_size: %u\n", threads_per_block, maxlen, batch_size);
+    printf("TPB: %d  maxlen: %d  | batch_size: %u\n", threads_per_block, maxlen, batch_size);
     printf("Charset size: %d\n", HOST_CHARSET_LEN);
-    printf("Starting GPU-assisted brute-force (Ctrl+C to abort)...\n\n");
+    printf("---------------------------------------------------------------------\n");
 
     cudaError_t cerr;
     cerr = cudaMemcpyToSymbol(DEV_CHARSET, HOST_CHARSET, sizeof(HOST_CHARSET));
@@ -201,10 +205,14 @@ int main(int argc, char** argv) {
             }
 
             start += this_count;
+            printf("\r---------------------------------------------------------------------\n");
+            printf("\rStarting GPU-assisted brute-force (Ctrl+C to abort)...\n\n");
+            printf("\r---------------------------------------------------------------------\n");
         }
     }
 
     printf("\n\n");
+    printf("---------------------------------------------------------------------\n");
     if (found) {
         printf("Password Found: %s\n", found_password);
     } else {
@@ -215,6 +223,7 @@ int main(int argc, char** argv) {
     total_elapsed = timespec_diff_s(&t_now, &t_start);
     avg_rate = (total_elapsed > 0.0) ? ((double)attempts / total_elapsed) : 0.0;
     printf("Total attempts: %" PRIu64 "  Time: %.2fs  Avg rate: %.0f/sec\n", attempts, total_elapsed, avg_rate);
+    printf("---------------------------------------------------------------------\n");
 
 cleanup:
     cudaFree(d_buf);

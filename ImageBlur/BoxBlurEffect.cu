@@ -101,7 +101,7 @@ int main(int argc, char* argv[])
     dim3 grid((width + block.x - 1) / block.x,
               (height + block.y - 1) / block.y);
 
-    printf("Applying Gaussian blur (max radius = %d)...\n", maxRadius);
+    printf("Applying box blur (max radius = %d)...\n", maxRadius);
     box_blur_effect<<<grid, block>>>(d_input, d_output, width, height, maxRadius);
     CUDA_CHECK(cudaPeekAtLastError());
     CUDA_CHECK(cudaDeviceSynchronize());

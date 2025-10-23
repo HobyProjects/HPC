@@ -105,17 +105,21 @@ int main(int argc, char **argv) {
     if (maxlen < 1) maxlen = DEFAULT_MAXLEN;
     if (maxlen > MAX_CAND_LEN) maxlen = MAX_CAND_LEN;
 
-    const char *salt_prefix = "$5$sHaDoW_CraCKsalt$"; 
+    const char *salt_prefix = "$5$"; // SHA256
     char *target_hash = crypt(password, salt_prefix);
     if (!target_hash) {
         perror("crypt");
         return 1;
     }
 
+    printf("---------------------------------------------------------------------\n");
+    printf("                     Shadow Crack using pThread                      \n");
+    printf("---------------------------------------------------------------------\n");
+    printf("Password: %s\n", password);
     printf("Target hash: %s\n", target_hash);
     printf("Threads: %d, max candidate length: %d\n", nthreads, maxlen);
     printf("Charset size: %zu\n", CHARSET_LEN);
-    printf("Starting brute-force (press Ctrl+C to abort)...\n\n");
+    printf("---------------------------------------------------------------------\n");
 
     pthread_t *tids = malloc(sizeof(pthread_t) * nthreads);
     thread_arg_t *targs = malloc(sizeof(thread_arg_t) * nthreads);
@@ -161,16 +165,21 @@ int main(int argc, char **argv) {
         if (rate > 0.0) {
             printf("\rTried: %" PRIu64 "  Last: %s  Rate: %.0f/sec  Elapsed: %.1fs  ",
                    cur_attempts, last[0] ? last : "-", rate, elapsed);
-        } else {
+        } 
+        else {
             printf("\rTried: %" PRIu64 "  Last: %s  Rate: -/sec  Elapsed: %.1fs  ",
                    cur_attempts, last[0] ? last : "-", elapsed);
         }
         fflush(stdout);
 
         last_attempts = cur_attempts;
+        printf("\r---------------------------------------------------------------------\n");
+        printf("\rStarting brute-force (press Ctrl+C to abort)...\n\n");
+        printf("\r---------------------------------------------------------------------\n");
     }
 
     printf("\n\n");
+    printf("---------------------------------------------------------------------\n");
     if (found_password[0]) {
         printf("Password Found : %s\n", found_password);
     } else {
@@ -187,6 +196,7 @@ int main(int argc, char **argv) {
     uint64_t total_attempts = atomic_load(&attempts);
     printf("Total attempts: %" PRIu64 "  Time: %.2fs  Avg rate: %.0f/sec\n",
            total_attempts, total_elapsed, total_elapsed > 0.0 ? total_attempts / total_elapsed : 0.0);
+    printf("---------------------------------------------------------------------\n");
 
     free(tids);
     free(targs);

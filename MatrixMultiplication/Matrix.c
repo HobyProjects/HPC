@@ -98,12 +98,9 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[WARN]: Odd number of matrices (%d). The last one will be ignored.\n", ml.count);
     }
 
-    char out_name[1024];
-    const char* const final_output = output_file;
-    snprintf(out_name, sizeof(out_name), final_output);
-    FILE* out = fopen(out_name, "w");
+    FILE* out = fopen(output_file, "w");
     if (!out) {
-        fprintf(stderr, "[ERROR]: Could not open output file '%s' for writing.\n", out_name);
+        fprintf(stderr, "[ERROR]: Could not open output file '%s' for writing.\n", output_file);
         mat_delete_list(&ml);
         return -4;
     }
@@ -148,7 +145,7 @@ int main(int argc, char** argv) {
     }
 
     fclose(out);
-    printf("[INFO]: Wrote %d result matrix/matrices to: %s\n", results_written, out_name);
+    printf("[INFO]: Wrote %d result matrix/matrices to: %s\n", results_written, output_file);
 
     mat_delete_list(&ml);
     return 0;
@@ -162,7 +159,7 @@ void mat_help() {
     printf(" <output-name>   : Path to your output file\n");
     printf(" <thread-count>  : Number of threads to use (<= biggest matrix dimension)\n");
     printf("----------------------------------------------\n");
-    printf(" Example: ./Matrix MatData.txt 4\n");
+    printf(" Example: ./Matrix MatData.txt OutData.txt 6\n");
     printf("----------------------------------------------\n");
 }
 
