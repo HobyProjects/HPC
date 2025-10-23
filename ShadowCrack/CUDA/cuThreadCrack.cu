@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
     if (maxlen > MAX_CAND_LEN) maxlen = MAX_CAND_LEN;
     if (batch_size == 0) batch_size = DEFAULT_BATCH_SIZE;
 
-    const char* salt_prefix = "$5$SALT"; 
+    const char* salt_prefix = "$5$"; 
     char* target_hash = crypt(password, salt_prefix);
     if (target_hash == NULL) {
         perror("crypt");
@@ -159,14 +159,14 @@ int main(int argc, char** argv) {
             uint32_t this_count = (uint32_t)((start + batch_size <= total) ? batch_size : (total - start));
             uint32_t blocks = (this_count + (uint32_t)threads_per_block - 1) / (uint32_t)threads_per_block;
 
-            generate_candidates_kernel<<<(size_t)blocks, (size_t)threads_per_block>>>(start, this_count, len, d_buf, max_stride);
+            generate_candidates_kernel<<<(size_t)blocks, (size_t)threads_per_block>>>(start, this_count, len, d_buf, stride);
             cerr = cudaGetLastError();
             if (cerr != cudaSuccess) {
                 fprintf(stderr, "Kernel launch failed: %s\n", cudaGetErrorString(cerr));
                 goto cleanup;
             }
 
-            size_t copy_bytes = (size_t)this_count * (size_t)max_stride;
+            size_t copy_bytes = (size_t)this_count * (size_t)stride;
             cerr = cudaMemcpy(h_buf, d_buf, copy_bytes, cudaMemcpyDeviceToHost);
             if (cerr != cudaSuccess) {
                 fprintf(stderr, "cudaMemcpy D2H failed: %s\n", cudaGetErrorString(cerr));
@@ -175,7 +175,7 @@ int main(int argc, char** argv) {
 
             uint32_t i;
             for (i = 0; i < this_count; ++i) {
-                char* cand = h_buf + (size_t)i * (size_t)max_stride;
+                char* cand = h_buf + (size_t)i * (size_t)stride;
                 cand[len] = '\0';
                 strncpy(last_combo, cand, MAX_CAND_LEN);
                 last_combo[MAX_CAND_LEN] = '\0';
